@@ -6,6 +6,7 @@ build/kfnnue: src/main.cpp
 	$(CXX) $(CXXFLAGS) $< -o $@
 test: build/kfnnue
 	./build/kfnnue selftest
+	python3 -m unittest discover -s tests -v
 clean:
 	rm -rf build
 .PHONY: all test clean

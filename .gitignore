@@ -3,3 +3,5 @@ build/
 *.nnue
 *.tsv
 *.gz
+__pycache__/
+*.pyc

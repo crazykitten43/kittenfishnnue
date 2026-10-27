@@ -94,20 +94,101 @@ vector<Sample> dataset(const string& path) {
     if(d.empty())throw runtime_error("empty dataset");
     return d;
 }
+
+float material(const Position& p) {
+    constexpr int value[6]={100,320,330,500,900,0};
+    int cp=0;
+    for(int piece:p.b) if(piece) cp+=value[(piece-1)%6]*(piece<=6?1:-1);
+    return float(cp)*(p.stm?-1:1);
+}
+struct Metrics {
+    double mse=0,mae=0,pred_mean=0,pred_std=0,target_std=0,corr=0;
+};
+template<class Predict> Metrics metrics(const vector<Sample>& data,Predict predict,size_t limit=0) {
+    size_t count=limit?min(limit,data.size()):data.size();
+    double sp=0,st=0,spp=0,stt=0,spt=0; Metrics m;
+    for(size_t i=0;i<count;i++) {
+        const auto& sample=data[i]; double p=predict(sample.p),t=sample.target*400;
+        if(!isfinite(p)) throw runtime_error("non-finite prediction");
+        m.mse+=(p-t)*(p-t);m.mae+=abs(p-t);
+        sp+=p;st+=t;spp+=p*p;stt+=t*t;spt+=p*t;
+    }
+    double n=double(count),vp=max(0.,spp/n-(sp/n)*(sp/n)),vt=max(0.,stt/n-(st/n)*(st/n));
+    m.mse/=n;m.mae/=n;m.pred_mean=sp/n;m.pred_std=sqrt(vp);m.target_std=sqrt(vt);
+    m.corr=vp>0&&vt>0?(spt/n-(sp/n)*(st/n))/sqrt(vp*vt):0;
+    return m;
+}
+void print_metrics(const string& label,const Metrics& m) {
+    cout<<label<<" MSE="<<m.mse<<" cp^2 MAE="<<m.mae
+        <<" cp pred_mean="<<m.pred_mean<<" pred_std="<<m.pred_std
+        <<" target_std="<<m.target_std<<" cp corr="<<m.corr<<'\n';
+}
+void diagnose(const FloatNet& n,const vector<Sample>& data) {
+    print_metrics("zero baseline",metrics(data,[](const Position&){return 0.;}));
+    print_metrics("material baseline",metrics(data,[](const Position& p){return material(p);}));
+    print_metrics("float model",metrics(data,[&](const Position& p){return n.predict(p)*400;}));
+    QuantNet q;q.convert(n);
+    print_metrics("quantized model",metrics(data,[&](const Position& p){return q.eval(q.start(p));}));
+    size_t low=0,high=0,total=0;
+    for(size_t i=0;i<min(size_t(256),data.size());i++) {
+        auto a=n.accum(data[i].p);
+        for(const auto& side:a)for(float x:side){low+=x<=0;high+=x>=1;++total;}
+    }
+    cout<<"activation sample (up to 256 positions): clipped_low="<<100.*low/total
+        <<"% clipped_high="<<100.*high/total<<"%\n";
+}
 const string START="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 int main(int argc,char**argv)try {
-    if(argc<2)throw runtime_error("commands: train TRAIN.tsv VAL.tsv PREFIX EPOCHS LR [RESUME.kff] | export MODEL.kff MODEL.nnue | eval MODEL.nnue FEN | bench MODEL.nnue [ITERATIONS] | selftest");
+    if(argc<2)throw runtime_error("commands: train TRAIN.tsv VAL.tsv PREFIX EPOCHS LR [RESUME.kff] | export MODEL.kff MODEL.nnue | eval MODEL.nnue FEN | bench MODEL.nnue [ITERATIONS] | diagnose MODEL.kff DATA.tsv | selftest");
     string cmd=argv[1];
     if(cmd=="train"&&argc>=7) {
         auto tr=dataset(argv[2]),va=dataset(argv[3]);FloatNet n;if(argc>=8)n.load(argv[7]);int epochs=stoi(argv[5]);float lr=stof(argv[6]);if(epochs<1||!isfinite(lr)||lr<=0||lr>1)throw runtime_error("invalid epochs/lr");mt19937 rng(42);double best=1e100;
-        for(int e=1;e<=epochs;e++){shuffle(tr.begin(),tr.end(),rng);for(const auto&s:tr)n.step(s.p,s.target,lr);double mse=0,mae=0;for(const auto&s:va){double err=(n.predict(s.p)-s.target)*400;mse+=err*err;mae+=abs(err);}mse/=va.size();cout<<"epoch "<<e<<" val MSE="<<mse<<" cp^2 MAE="<<mae/va.size()<<" cp\n";n.save(string(argv[4])+".last.kff");if(mse<best){best=mse;n.save(string(argv[4])+".best.kff");QuantNet q;q.convert(n);q.save(string(argv[4])+".nnue");}}
+        print_metrics("zero baseline",metrics(va,[](const Position&){return 0.;}));
+        print_metrics("material baseline",metrics(va,[](const Position& p){return material(p);}));
+        for(int e=1;e<=epochs;e++) {
+            auto started=chrono::steady_clock::now();
+            shuffle(tr.begin(),tr.end(),rng);
+            for(const auto& sample:tr)n.step(sample.p,sample.target,lr);
+            auto validation=metrics(va,[&](const Position& p){return n.predict(p)*400;});
+            cout<<"epoch "<<e<<" ";print_metrics("val",validation);
+            print_metrics("train sample (up to 4096)",metrics(tr,[&](const Position& p){return n.predict(p)*400;},4096));
+            n.save(string(argv[4])+".last.kff");
+            if(validation.mse<best) {
+                best=validation.mse;n.save(string(argv[4])+".best.kff");
+                QuantNet q;q.convert(n);q.save(string(argv[4])+".nnue");
+                print_metrics("best quantized val",metrics(va,[&](const Position& p){return q.eval(q.start(p));}));
+            }
+            cout<<"epoch seconds="<<chrono::duration<double>(chrono::steady_clock::now()-started).count()<<'\n';
+        }
     } else if(cmd=="export"&&argc==4){FloatNet n;n.load(argv[2]);QuantNet q;q.convert(n);q.save(argv[3]);}
     else if(cmd=="eval"&&argc==4){QuantNet n;n.load(argv[2]);cout<<n.eval(n.start(fen(argv[3])))<<" cp (side to move)\n";}
+    else if(cmd=="diagnose"&&argc==4){FloatNet n;n.load(argv[2]);auto d=dataset(argv[3]);diagnose(n,d);}
     else if(cmd=="bench"&&argc>=3){QuantNet n;n.load(argv[2]);int it=argc>3?stoi(argv[3]):1000000;if(it<1)throw runtime_error("iterations must be positive");Position p=fen(START),p2=fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");auto s=n.start(p);volatile double sink=0;auto t=chrono::steady_clock::now();for(int i=0;i<it;i++){n.update(s,(i&1)?p:p2);sink=sink+n.eval(s);}double sec=chrono::duration<double>(chrono::steady_clock::now()-t).count();cout<<it/sec<<" incremental update+eval/s, "<<sec<<" s; checksum "<<sink<<"\n";t=chrono::steady_clock::now();for(int i=0;i<it;i++)sink=sink+n.eval(s);sec=chrono::duration<double>(chrono::steady_clock::now()-t).count();cout<<it/sec<<" cached-accumulator eval/s; checksum "<<sink<<"\n";}
     else if(cmd=="selftest") {
         FloatNet f;QuantNet q;q.convert(f);auto p=fen(START);auto s=q.start(p);mt19937 rng(7);
         for(int i=0;i<200;i++){Position next=s.p;int a=int(rng()%64),b=int(rng()%64);swap(next.b[a],next.b[b]);next.stm^=1;q.update(s,next);auto fresh=q.start(next);if(s.a!=fresh.a||q.eval(s)!=q.eval(fresh))throw runtime_error("incremental mismatch");}
-        double before=f.predict(p);f.step(p,1,.0001f);if(abs(f.predict(p)-1)>=abs(before-1))throw runtime_error("gradient did not lower loss");q.save("test.nnue");QuantNet loaded;loaded.load("test.nnue");if(q.eval(q.start(p))!=loaded.eval(loaded.start(p)))throw runtime_error("roundtrip mismatch");remove("test.nnue");cout<<"PASS: incremental rebuild equivalence, SGD loss, quantized roundtrip\n";
+        // Check analytic gradients against finite differences for all layer types.
+        int unit=0;auto initial=f.accum(p);
+        while(unit<H && !(initial[0][unit]>.02f&&initial[0][unit]<.9f))++unit;
+        if(unit==H)throw runtime_error("no finite-difference test unit");
+        int feat=active(p,0).front();
+        array<float*,3> parameters={&f.w[size_t(feat)*H+unit],&f.b[unit],&f.out[unit]};
+        array<float,3> original{},numerical{};
+        constexpr float epsilon=.001f,rate=.001f,target=.3f;
+        auto loss=[&](){double error=f.predict(p)-target;return error*error;};
+        for(int i=0;i<3;i++) {
+            float& parameter=*parameters[i];original[i]=parameter;
+            parameter=original[i]+epsilon;double plus=loss();
+            parameter=original[i]-epsilon;double minus=loss();
+            parameter=original[i];numerical[i]=float((plus-minus)/(2*epsilon));
+        }
+        f.step(p,target,rate);
+        for(int i=0;i<3;i++) {
+            float analytic=(original[i]-*parameters[i])/rate;
+            if(abs(analytic-numerical[i])>.002f)
+                throw runtime_error("finite-difference gradient mismatch");
+        }
+        double before=f.predict(p);f.step(p,1,.0001f);if(abs(f.predict(p)-1)>=abs(before-1))throw runtime_error("gradient did not lower loss");q.save("test.nnue");QuantNet loaded;loaded.load("test.nnue");if(q.eval(q.start(p))!=loaded.eval(loaded.start(p)))throw runtime_error("roundtrip mismatch");remove("test.nnue");cout<<"PASS: incremental rebuild equivalence, finite-difference gradients, SGD loss, quantized roundtrip\n";
     } else throw runtime_error("invalid command/arguments (train requires explicit LR)");
     return 0;
 }catch(const exception&e){cerr<<"error: "<<e.what()<<'\n';return 1;}

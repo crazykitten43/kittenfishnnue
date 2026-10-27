@@ -34,6 +34,41 @@ make test
 `-march=native` targets the build CPU. For a portable binary:
 `make CXXFLAGS='-O3 -std=c++17 -Wall -Wextra -Wpedantic'`.
 
+## Important: score perspective fix
+
+The KittenFish `positions_100k.csv.gz` dataset uses **side-to-move** scores.
+`PositionGeneration.py` explicitly calls `info["score"].pov(board.turn)`.
+The C++ TSV loader expects **White** scores and internally converts to side to
+move. Passing the CSV values directly as White scores reverses Black-to-move
+training targets. Old conversion instructions did this incorrectly. Do not
+resume weights trained on those incorrectly converted files for the clean rerun.
+
+Use the explicit converter (Python standard library only):
+
+```sh
+python3 scripts/prepare_dataset.py data/positions_100k.csv.gz data --input-perspective stm
+./build/kfnnue train data/train_white.tsv data/val_white.tsv checkpoints/fixed 10 0.0001
+./build/kfnnue diagnose checkpoints/fixed.best.kff data/val_white.tsv
+```
+
+For a future dataset that genuinely contains White-perspective labels, specify
+`--input-perspective white` instead. The converter never guesses. It preserves
+the existing deterministic game-grouped 80/20 split, deduplicates by FEN's first
+four fields, and writes new `_white.tsv` filenames so old files remain available.
+It loads deduplication keys in RAM and is intended for curated datasets, not
+hundreds of millions of records in a single invocation. Validation rows must
+not be used for training, including tiny-set overfit experiments.
+
+See [EXPERIMENTS.md](EXPERIMENTS.md) for the diagnosis and measured results.
+
+The trainer now prints zero/material baselines, training-sample metrics,
+validation prediction mean and standard deviation, target standard deviation,
+prediction correlation, epoch time, and validation metrics for each newly saved
+quantized model. `diagnose` additionally reports activation clipping on up to
+256 positions. Training metrics use a shuffled sample of up to 4096 rows, not
+the complete training dataset. Baseline material is 100/320/330/500/900cp and does
+not use any learned parameters.
+
 ## Training data contract
 
 Uncompressed TSV, no header: full FEN, one tab, numeric centipawns **from White's
@@ -63,8 +98,8 @@ Online sparse SGD, deterministic epoch shuffling (seed 42), MSE loss,
 clipped output gradient, bounded parameters. Validation prints float-model
 MSE in cp squared and MAE in cp. The best float validation MSE selects
 `.best.kff` and quantized `.nnue`; `.last.kff` supports continuation. On resume,
-shuffle order and best-metric tracking restart. Quantized validation should be
-measured separately before deployment; quantization can change accuracy.
+shuffle order and best-metric tracking restart. Quantized validation is printed when a new best model is saved; quantization
+can change accuracy. The checkpoint is still selected by float-model MSE.
 
 This is a correctness-first CPU trainer, not a high-throughput GPU training
 pipeline. It loads datasets into RAM and updates one sample at a time. Do not
@@ -90,6 +125,10 @@ Model formats KFQ1 and KFF1 are fixed-architecture native-endian files, not
 Stockfish-compatible .nnue files. Use trusted local models on the same endian
 architecture. There is no checksum, compression, or architecture conversion.
 
-`selftest` checks 200 accumulator updates against complete rebuilds (including
+`make test` also checks converter perspective handling, game grouping,
+deduplication and the required explicit perspective argument.
+
+`selftest` checks finite-difference gradients for feature, bias and output
+weights, 200 accumulator updates against complete rebuilds (including
 king bucket changes), one SGD descent step, and model roundtripping. Its board
 mutations intentionally exercise tensor bookkeeping rather than legal play.
