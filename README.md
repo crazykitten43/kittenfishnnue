@@ -92,14 +92,18 @@ Install the one Python dependency and download the archive:
 python3 -m pip install --user zstandard
 curl --fail --location --retry 3 \
   https://database.lichess.org/lichess_db_eval.jsonl.zst \
-  --output data/lichess_db_eval.jsonl.zst
+  | gcloud storage cp - gs://YOUR_BUCKET/lichess_db_eval.jsonl.zst
 ```
+
+Replace `YOUR_BUCKET` with the name of a bucket you own. This streams the
+compressed archive from Lichess straight into Cloud Storage, without a local
+archive file.
 
 Try the first 100,000 lines before processing the full archive:
 
 ```sh
-python3 scripts/convert_lichess_eval.py \
-  data/lichess_db_eval.jsonl.zst data/sample \
+gcloud storage cat gs://YOUR_BUCKET/lichess_db_eval.jsonl.zst | \
+  python3 scripts/convert_lichess_eval.py - data/sample \
   --target 20000 --max-lines 100000 --input-perspective stm
 ```
 
@@ -108,15 +112,15 @@ scores are White-perspective, rerun with `--input-perspective white`. Once
 confirmed, process the whole archive, for example:
 
 ```sh
-python3 scripts/convert_lichess_eval.py \
-  data/lichess_db_eval.jsonl.zst data/lichess500k \
+gcloud storage cat gs://YOUR_BUCKET/lichess_db_eval.jsonl.zst | \
+  python3 scripts/convert_lichess_eval.py - data/lichess500k \
   --target 500000 --min-depth 20 --input-perspective stm
 ./build/kfnnue train data/lichess500k/train_white.tsv \
   data/lichess500k/val_white.tsv checkpoints/lichess500k 20 0.0001
 ```
 
-The converter streams decompression and keeps only the reservoir sample in
-memory, but the compressed source file must fit on disk. `--max-lines` is for
+The converter streams decompression from the bucket and keeps only the
+reservoir sample in memory. `--max-lines` is for
 format checks only; its sample comes from the beginning of the archive and is
 not representative of a uniform sample from the full file. The default full
 run reads every record. See [database.lichess.org](https://database.lichess.org/)

@@ -16,6 +16,9 @@ from pathlib import Path
 
 
 def open_input(path):
+    if str(path) == "-":
+        import io
+        return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
     raw = open(path, "rb")
     magic = raw.read(4)
     raw.seek(0)
