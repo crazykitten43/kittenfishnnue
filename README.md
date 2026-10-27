@@ -46,7 +46,7 @@ resume weights trained on those incorrectly converted files for the clean rerun.
 Use the explicit converter (Python standard library only):
 
 ```sh
-python3 scripts/prepare_dataset.py data/positions_100k.csv.gz data --input-perspective stm
+python3 scripts/prepare_dataset.py data/positions_100k.csv.gz data --input-perspective white
 ./build/kfnnue train data/train_white.tsv data/val_white.tsv checkpoints/fixed 10 0.0001
 ./build/kfnnue diagnose checkpoints/fixed.best.kff data/val_white.tsv
 ```
@@ -74,11 +74,15 @@ not use any learned parameters.
 The database is JSONL compressed with Zstandard: one JSON position per line.
 Lichess recommends taking the evaluation record with the greatest `depth`, then
 using its first PV. The converter follows that rule, skips mate-only or too
-shallow positions, clamps scores to +/-2000cp, samples up to 500,000 positions
-uniformly with a reservoir, and splits by a stable position hash. Identical
-positions therefore cannot leak across the train/validation split. The export
-has no game IDs, so it cannot make game-grouped splits. Lichess FENs have four
-fields; the converter appends the two move counters expected by this trainer.
+shallow positions, clamps scores to +/-2000cp, and stops as soon as it collects
+the requested number of unique usable positions (500,000 by default). It writes
+the first eligible positions in archive order rather than scanning the entire
+archive for a uniform reservoir sample, so the resulting dataset may reflect
+the archive's ordering. It splits selected positions by a stable position hash;
+identical positions therefore cannot leak across the train/validation split.
+The export has no game IDs, so it cannot make game-grouped splits. Lichess FENs
+have four fields; the converter appends the two move counters expected by this
+trainer.
 
 The Lichess schema page does not state whether `pvs[0].cp` is from White's or
 the side-to-move's perspective. Make that choice explicit after checking a few
@@ -104,7 +108,7 @@ Try the first 100,000 lines before processing the full archive:
 ```sh
 gcloud storage cat gs://YOUR_BUCKET/lichess_db_eval.jsonl.zst | \
   python3 scripts/convert_lichess_eval.py - data/sample \
-  --target 20000 --max-lines 100000 --input-perspective stm
+  --target 20000 --max-lines 100000 --input-perspective white
 ```
 
 Review a few converted rows and verify the sign against Lichess analysis. If
@@ -114,7 +118,7 @@ confirmed, process the whole archive, for example:
 ```sh
 gcloud storage cat gs://YOUR_BUCKET/lichess_db_eval.jsonl.zst | \
   python3 scripts/convert_lichess_eval.py - data/lichess500k \
-  --target 500000 --min-depth 20 --input-perspective stm
+  --target 500000 --min-depth 20 --input-perspective white
 ./build/kfnnue train data/lichess500k/train_white.tsv \
   data/lichess500k/val_white.tsv checkpoints/lichess500k 20 0.0001
 ```
