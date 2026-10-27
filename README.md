@@ -84,11 +84,10 @@ The export has no game IDs, so it cannot make game-grouped splits. Lichess FENs
 have four fields; the converter appends the two move counters expected by this
 trainer.
 
-The Lichess schema page does not state whether `pvs[0].cp` is from White's or
-the side-to-move's perspective. Make that choice explicit after checking a few
-positions against Lichess analysis. `stm` flips Black-to-move values; `white`
-leaves them as-is. Never guess or silently reuse the perspective rule from the
-rated-game generator.
+The converter requires an explicit input score perspective. This workflow uses
+`white`: the Lichess analysis board normalizes scores to White's perspective.
+Check a Black-to-move sample against Lichess analysis if you want to verify the
+sign. Choosing `stm` instead flips Black-to-move values.
 
 Install the one Python dependency and download the archive:
 
@@ -123,12 +122,11 @@ gcloud storage cat gs://YOUR_BUCKET/lichess_db_eval.jsonl.zst | \
   data/lichess500k/val_white.tsv checkpoints/lichess500k 20 0.0001
 ```
 
-The converter streams decompression from the bucket and keeps only the
-reservoir sample in memory. `--max-lines` is for
-format checks only; its sample comes from the beginning of the archive and is
-not representative of a uniform sample from the full file. The default full
-run reads every record. See [database.lichess.org](https://database.lichess.org/)
-for the schema and its recommendation about depth and PV selection.
+The converter streams decompression and keeps only the selected positions
+in memory. Both `--max-lines` and `--target` can stop early, so results come
+from the beginning of the archive and may reflect its ordering. See
+[database.lichess.org](https://database.lichess.org/) for the schema and its
+recommendation about depth and PV selection.
 
 ## Training data contract
 
