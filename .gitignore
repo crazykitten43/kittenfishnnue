@@ -1,0 +1,5 @@
+build/
+*.kff
+*.nnue
+*.tsv
+*.gz
