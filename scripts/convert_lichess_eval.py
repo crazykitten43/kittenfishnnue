@@ -27,7 +27,10 @@ def open_input(path):
     raw = open(path, "rb")
     magic = raw.read(4)
     raw.seek(0)
-    if magic == b"\x28\xb5\x2f\xfd":
+    # Zstandard skippable frames use little-endian magic 0x184D2A50..0x184D2A5F.
+    # Some valid .zst exports begin with one before the data frames.
+    zstd_skippable = len(magic) == 4 and 0x184D2A50 <= int.from_bytes(magic, "little") <= 0x184D2A5F
+    if magic == b"\\x28\\xb5\\x2f\\xfd" or zstd_skippable:
         try:
             import zstandard
         except ImportError as exc:
