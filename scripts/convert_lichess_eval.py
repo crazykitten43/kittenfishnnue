@@ -65,7 +65,7 @@ def best_cp(evals, min_depth):
 
 
 def convert(source, outdir, target, min_depth, perspective, max_lines=0):
-    reservoir = []
+    selected = []
     selected_fens = set()
     scanned = accepted = duplicates = bad = mate_or_shallow = 0
     with open_input(source) as stream:
@@ -92,13 +92,13 @@ def convert(source, outdir, target, min_depth, perspective, max_lines=0):
                 if key in selected_fens:
                     duplicates += 1
                     continue
-                reservoir.append((key, full_fen, cp))
+                selected.append((key, full_fen, cp))
                 selected_fens.add(key)
-                if len(reservoir) >= target:
+                if len(selected) >= target:
                     break
             except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
                 bad += 1
-    if not reservoir:
+    if not selected:
         raise ValueError("No usable centipawn positions found; lower --min-depth or check input")
 
     outdir = Path(outdir)
@@ -106,7 +106,7 @@ def convert(source, outdir, target, min_depth, perspective, max_lines=0):
     counts = {"train": 0, "val": 0}
     outputs = {name: open(outdir / f"{name}_white.tsv", "w") for name in counts}
     try:
-        for key, fen, cp in reservoir:
+        for key, fen, cp in selected:
             # No game IDs exist in this database. Stable position hashing keeps
             # identical positions in one split even if source duplication occurs.
             digest = hashlib.sha256(("lichess-eval-split:" + key).encode()).digest()
@@ -116,15 +116,15 @@ def convert(source, outdir, target, min_depth, perspective, max_lines=0):
     finally:
         for output in outputs.values():
             output.close()
-    print(f"Read lines: {scanned:,}; usable labels: {accepted:,}; selected: {len(reservoir):,}")
+    print(f"Read lines: {scanned:,}; usable labels: {accepted:,}; selected: {len(selected):,}")
     print(f"Skipped malformed: {bad:,}; mate-only/shallow: {mate_or_shallow:,}; repeated in sample: {duplicates:,}")
     print(f"Score input perspective: {perspective}; TSV perspective: white")
     print(f"Training: {counts['train']:,}; validation: {counts['val']:,}")
     print(f"Files: {outdir}/train_white.tsv and {outdir}/val_white.tsv")
-    if len(reservoir) >= target:
+    if len(selected) >= target:
         print(f"Stopped after reaching target of {target:,} unique positions.")
     else:
-        print(f"Reached end of input before target; selected {len(reservoir):,} positions.")
+        print(f"Reached end of input before target; selected {len(selected):,} positions.")
 
 
 if __name__ == "__main__":
