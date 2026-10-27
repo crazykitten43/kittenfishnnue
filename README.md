@@ -69,6 +69,59 @@ quantized model. `diagnose` additionally reports activation clipping on up to
 the complete training dataset. Baseline material is 100/320/330/500/900cp and does
 not use any learned parameters.
 
+## Convert Lichess's evaluated-position database
+
+The database is JSONL compressed with Zstandard: one JSON position per line.
+Lichess recommends taking the evaluation record with the greatest `depth`, then
+using its first PV. The converter follows that rule, skips mate-only or too
+shallow positions, clamps scores to +/-2000cp, samples up to 500,000 positions
+uniformly with a reservoir, and splits by a stable position hash. Identical
+positions therefore cannot leak across the train/validation split. The export
+has no game IDs, so it cannot make game-grouped splits. Lichess FENs have four
+fields; the converter appends the two move counters expected by this trainer.
+
+The Lichess schema page does not state whether `pvs[0].cp` is from White's or
+the side-to-move's perspective. Make that choice explicit after checking a few
+positions against Lichess analysis. `stm` flips Black-to-move values; `white`
+leaves them as-is. Never guess or silently reuse the perspective rule from the
+rated-game generator.
+
+Install the one Python dependency and download the archive:
+
+```sh
+python3 -m pip install --user zstandard
+curl --fail --location --retry 3 \
+  https://database.lichess.org/lichess_db_eval.jsonl.zst \
+  --output data/lichess_db_eval.jsonl.zst
+```
+
+Try the first 100,000 lines before processing the full archive:
+
+```sh
+python3 scripts/convert_lichess_eval.py \
+  data/lichess_db_eval.jsonl.zst data/sample \
+  --target 20000 --max-lines 100000 --input-perspective stm
+```
+
+Review a few converted rows and verify the sign against Lichess analysis. If
+scores are White-perspective, rerun with `--input-perspective white`. Once
+confirmed, process the whole archive, for example:
+
+```sh
+python3 scripts/convert_lichess_eval.py \
+  data/lichess_db_eval.jsonl.zst data/lichess500k \
+  --target 500000 --min-depth 20 --input-perspective stm
+./build/kfnnue train data/lichess500k/train_white.tsv \
+  data/lichess500k/val_white.tsv checkpoints/lichess500k 20 0.0001
+```
+
+The converter streams decompression and keeps only the reservoir sample in
+memory, but the compressed source file must fit on disk. `--max-lines` is for
+format checks only; its sample comes from the beginning of the archive and is
+not representative of a uniform sample from the full file. The default full
+run reads every record. See [database.lichess.org](https://database.lichess.org/)
+for the schema and its recommendation about depth and PV selection.
+
 ## Training data contract
 
 Uncompressed TSV, no header: full FEN, one tab, numeric centipawns **from White's
