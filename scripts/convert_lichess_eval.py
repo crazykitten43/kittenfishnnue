@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sample Lichess evaluation JSONL(.zst) into KittenFish White-score TSVs.
+"""Convert the first usable Lichess evaluation positions into White-score TSVs.
 
 Each input line is one Lichess position record. Uses the deepest eval record,
 then its first PV as recommended by database.lichess.org. Mate-only records
@@ -10,7 +10,6 @@ import gzip
 import hashlib
 import json
 import math
-import random
 import sys
 from pathlib import Path
 
@@ -30,7 +29,7 @@ def open_input(path):
     # Zstandard skippable frames use little-endian magic 0x184D2A50..0x184D2A5F.
     # Some valid .zst exports begin with one before the data frames.
     zstd_skippable = len(magic) == 4 and 0x184D2A50 <= int.from_bytes(magic, "little") <= 0x184D2A5F
-    if magic == b"\\x28\\xb5\\x2f\\xfd" or zstd_skippable:
+    if magic == b"\x28\xb5\x2f\xfd" or zstd_skippable:
         try:
             import zstandard
         except ImportError as exc:
@@ -65,8 +64,7 @@ def best_cp(evals, min_depth):
     return score if isinstance(score, (int, float)) and math.isfinite(score) else None
 
 
-def convert(source, outdir, target, min_depth, perspective, seed, max_lines=0):
-    rng = random.Random(seed)
+def convert(source, outdir, target, min_depth, perspective, max_lines=0):
     reservoir = []
     selected_fens = set()
     scanned = accepted = duplicates = bad = mate_or_shallow = 0
@@ -94,16 +92,10 @@ def convert(source, outdir, target, min_depth, perspective, seed, max_lines=0):
                 if key in selected_fens:
                     duplicates += 1
                     continue
-                record = (key, full_fen, cp)
-                if len(reservoir) < target:
-                    reservoir.append(record)
-                    selected_fens.add(key)
-                else:
-                    index = rng.randrange(accepted)
-                    if index < target:
-                        selected_fens.discard(reservoir[index][0])
-                        reservoir[index] = record
-                        selected_fens.add(key)
+                reservoir.append((key, full_fen, cp))
+                selected_fens.add(key)
+                if len(reservoir) >= target:
+                    break
             except (json.JSONDecodeError, KeyError, TypeError, ValueError, OverflowError):
                 bad += 1
     if not reservoir:
@@ -129,6 +121,10 @@ def convert(source, outdir, target, min_depth, perspective, seed, max_lines=0):
     print(f"Score input perspective: {perspective}; TSV perspective: white")
     print(f"Training: {counts['train']:,}; validation: {counts['val']:,}")
     print(f"Files: {outdir}/train_white.tsv and {outdir}/val_white.tsv")
+    if len(reservoir) >= target:
+        print(f"Stopped after reaching target of {target:,} unique positions.")
+    else:
+        print(f"Reached end of input before target; selected {len(reservoir):,} positions.")
 
 
 if __name__ == "__main__":
@@ -136,11 +132,10 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path, help="Lichess JSONL or .zst export")
     parser.add_argument("outdir", type=Path)
     parser.add_argument("--target", type=int, default=500_000,
-                        help="Uniform reservoir sample size (default: 500000)")
+                        help="Stop after this many unique usable positions (default: 500000)")
     parser.add_argument("--min-depth", type=int, default=20)
     parser.add_argument("--input-perspective", choices=("white", "stm"), required=True,
                         help="Explicitly set the meaning of pvs[0].cp")
-    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-lines", type=int, default=0,
                         help="Read only this many records for a quick format test; 0 reads all")
     args = parser.parse_args()
@@ -148,7 +143,7 @@ if __name__ == "__main__":
         parser.error("target and min-depth must be positive; max-lines cannot be negative")
     try:
         convert(args.source, args.outdir, args.target, args.min_depth,
-                args.input_perspective, args.seed, args.max_lines)
+                args.input_perspective, args.max_lines)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
