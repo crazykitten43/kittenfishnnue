@@ -18,7 +18,12 @@ from pathlib import Path
 def open_input(path):
     if str(path) == "-":
         import io
-        return io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+        try:
+            import zstandard
+        except ImportError as exc:
+            raise SystemExit("Install zstandard first: python3 -m pip install zstandard") from exc
+        reader = zstandard.ZstdDecompressor().stream_reader(sys.stdin.buffer)
+        return io.TextIOWrapper(reader, encoding="utf-8", errors="replace")
     raw = open(path, "rb")
     magic = raw.read(4)
     raw.seek(0)
@@ -144,3 +149,4 @@ if __name__ == "__main__":
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
+
