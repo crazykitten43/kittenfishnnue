@@ -47,6 +47,9 @@ def valid_fen(fen):
     fields = fen.strip().split()
     if len(fields) < 4 or fields[1] not in ("w", "b"):
         return None
+    # Reject invalid editor positions that the C++ trainer cannot load.
+    if sum(ch in "pnbrqkPNBRQK" for ch in fields[0]) > 32:
+        return None
     # Lichess stores four position fields; the C++ reader expects full FEN.
     return " ".join(fields[:4]) + " 0 1", fields[1]
 
